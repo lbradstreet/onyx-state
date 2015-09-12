@@ -2,7 +2,10 @@
   (:require [taoensso.timbre :refer [info error warn trace fatal] :as timbre]
             [clojure.core.async :refer [chan >!! <!! close! sliding-buffer]]))
 
-(defn apply-seen-id [seen-buckets id]
+(defn apply-seen-id 
+  "Update the buckets with a new id. 
+   Currently only updates the first set and does not update any of the bloom filters."
+  [seen-buckets id]
   (update-in seen-buckets [:sets 0] conj id))
 
 (defn seen? 
