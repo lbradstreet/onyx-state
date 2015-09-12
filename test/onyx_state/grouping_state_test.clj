@@ -62,12 +62,16 @@
    :apply-log-entry balance-apply-log-entry
    :produce-segments balance-produce-segments})
 
+;; A log medium for writing seen ids to
 (def ids-log
   {0 (atom []) 1 (atom [])})
 
+;; A log medium for writing state updates to
 (def entries-log
   {0 (atom []) 1 (atom [])})
 
+;; An atom that can be updated when the job completes
+;; to be checked against the results that we expect
 (def final-results (atom {}))
 
 (def insert-calls
