@@ -2,7 +2,7 @@
   (:require [clojure.test :refer :all]
             [onyx-state.core :refer :all]))
 
-(deftest state-updates-segments
+#_(deftest state-updates-segments
   (testing "state updates and entries generation"
     (let [replica nil
           peer-state nil
@@ -31,3 +31,13 @@
                                            {} 
                                            (read-entries replica peer-state log))]
           (is (= state-after-playback state2)))))))
+
+#_(deftest seen-segments
+  (testing "Filter seen segments"
+    (is (true? (seen? {:id :a}
+                      {:blooms []
+                       :sets [#{:c} #{:a}]})))
+
+    (is (false? (seen? {:id :a}
+                       {:blooms []
+                        :sets [#{:c} #{}]})))))
