@@ -62,9 +62,6 @@
    :apply-log-entry balance-apply-log-entry
    :produce-segments balance-produce-segments})
 
-;;;;;;;;;;;;
-;; Onyx state type code to make it into Onyx core
-
 (def ids-log
   {0 (atom []) 1 (atom [])})
 
