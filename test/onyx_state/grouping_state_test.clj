@@ -56,6 +56,12 @@
   [segment]
   (:id segment))
 
+(def state-fns
+  {:id segment->id
+   :produce-log-entries balance-produce-log-entries
+   :apply-log-entry balance-apply-log-entry
+   :produce-segments balance-produce-segments})
+
 ;;;;;;;;;;;;
 ;; Onyx state type code to make it into Onyx core
 
@@ -66,12 +72,6 @@
   {0 (atom []) 1 (atom [])})
 
 (def final-results (atom {}))
-
-(def state-fns
-  {:id segment->id
-   :produce-log-entries balance-produce-log-entries
-   :apply-log-entry balance-apply-log-entry
-   :produce-segments balance-produce-segments})
 
 (def insert-calls
   {:lifecycle/before-task-start (fn [event lifecycle]
