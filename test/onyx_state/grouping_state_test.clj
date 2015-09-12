@@ -62,11 +62,11 @@
    :apply-log-entry balance-apply-log-entry
    :produce-segments balance-produce-segments})
 
-;; A log medium for writing seen ids to
+;; A fake log medium for writing seen ids to
 (def ids-log
   {0 (atom []) 1 (atom [])})
 
-;; A log medium for writing state updates to
+;; A fake log medium for writing state updates to
 (def entries-log
   {0 (atom []) 1 (atom [])})
 
