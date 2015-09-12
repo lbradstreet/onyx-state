@@ -16,9 +16,9 @@
 ; 2. Should possibly have a new message-id that is stable over retries. 
 ; This id can be used as a seen id (though possibly we should also support seen ids 
 ; generated from segments)
-; 3. Crashing seems to cause all peers to be stopped and started again 
-; (at least they warm up spin until the peer has restarted) and this causes issues 
-; when trying to do recovery in this test
+; 3. Switching on restart-pred-fn and throwing an exception seems to cause all
+; peers to be stopped and started again (at least they warm up spin until the
+; peer has restarted) and this causes issues when trying to do recovery in this test
 
 
 ;;;;;;;;;;;;;;
@@ -45,7 +45,8 @@
     :retract (dissoc state k)))
 
 (defn balance-produce-segments 
-  "Produce the segments that should be sent on to the egress tasks"
+  "Produce the segments that should be sent on to the egress tasks.
+   Currently not used in this test as we have no good way of sending them to the next tasks."
   [state segment [op k v]]
   (list {:key k
          :sum v}))
