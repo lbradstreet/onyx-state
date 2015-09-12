@@ -28,23 +28,31 @@
 ;; if using some form of internal message-id)
 
 ;; A log entry generator which assert or retracts keys
-(defn balance-produce-log-entries [state segment]
+(defn balance-produce-log-entries 
+  "Generate the log entry that asserts that a key should be updated to a value"
+  [state segment]
   (let [k (:key segment)
         v (:value segment)] 
     (list [:assert k (+ (get state k 0) v)])))
 
 ;; A function to apply that log entry to update some agg state
-(defn balance-apply-log-entry [state [op k v]]
+(defn balance-apply-log-entry 
+  "Apply a log entry to a state. In this test there are no retractions
+   but we implement it anyway"
+  [state [op k v]]
   (case op
     :assert (assoc state k v)
     :retract (dissoc state k)))
 
-;; And a function to output segments to the egress tasks
-(defn balance-produce-segments [state segment [op k v]]
+(defn balance-produce-segments 
+  "Produce the segments that should be sent on to the egress tasks"
+  [state segment [op k v]]
   (list {:key k
          :sum v}))
 
-(defn id-fn [segment]
+(defn segment->id 
+  "Turn a segment into an id used to determine whether a segment has been seen before"
+  [segment]
   (:id segment))
 
 ;;;;;;;;;;;;
@@ -58,12 +66,15 @@
 
 (def final-results (atom {}))
 
+(def state-fns
+  {:id segment->id
+   :produce-log-entries balance-produce-log-entries
+   :apply-log-entry balance-apply-log-entry
+   :produce-segments balance-produce-segments})
+
 (def insert-calls
   {:lifecycle/before-task-start (fn [event lifecycle]
-                                  {:state/fns {:id id-fn
-                                               :produce-log-entries balance-produce-log-entries
-                                               :apply-log-entry balance-apply-log-entry
-                                               :produce-segments balance-produce-segments}
+                                  {:state/fns state-fns
                                    :state/seen-log ids-log
                                    :state/entries-log entries-log})
    :lifecycle/after-task-stop (fn [{:keys [state/seen-log state/entries-log 
@@ -78,7 +89,6 @@
 (defn restartable? [& args]
   (info "Restartable")
   true)
-
 
 ;;;;;;;;;;;;;;;;;
 ;; Test code

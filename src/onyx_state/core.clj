@@ -5,7 +5,12 @@
 (defn apply-seen-id [seen-buckets id]
   (update-in seen-buckets [:sets 0] conj id))
 
-(defn seen? [{:keys [blooms sets] :as buckets} id]
+(defn seen? 
+  "Determine whether an id has been seen before. First check the bloom filter buckets, if
+  a bloom filter thinks it has been seen before, check the corresponding set bucket.
+  The idea is that the sets will expire before the buckets do.
+  Currently this function just checks the sets."
+  [{:keys [blooms sets] :as buckets} id]
   ;; do some pass on bloom-buckets, if any are maybe seen, then check corresponding id-bucket
   (boolean 
     (first 
@@ -16,25 +21,31 @@
 ;;;;
 ;; For onyx to implement
 ;; We can implement log storage for Kafka and maybe ZK (if small data is used and we gc)
-(defmulti store-log-entries (fn [replica state log entries]
-                          (cond (and (= (type log)
-                                        clojure.lang.Atom)
-                                     (vector? @log))
-                                :vector-atom)))
+(defmulti store-log-entries 
+  "Store state update [op k v] entries in a log"
+  (fn [replica state log entries]
+    (cond (and (= (type log)
+                  clojure.lang.Atom)
+               (vector? @log))
+          :vector-atom)))
 
 (defmethod store-log-entries :vector-atom [_ _ log entries]
   (swap! log into entries))
 
-(defmulti read-log-entries (fn [replica state log]
-                             (cond (and (= (type log)
-                                           clojure.lang.Atom)
-                                        (vector? @log))
-                                :vector-atom)))
+(defmulti read-log-entries 
+  "Read state update [op k v] entries from log"
+  (fn [replica state log]
+    (cond (and (= (type log)
+                  clojure.lang.Atom)
+               (vector? @log))
+          :vector-atom)))
 
 (defmethod read-log-entries :vector-atom [_ _ log]
   @log)
 
-(defmulti store-seen-ids (fn [replica state seen-log seen-ids]
+(defmulti store-seen-ids 
+  "Store seen ids in a log. Ideally these will be timestamped for auto expiry"
+  (fn [replica state seen-log seen-ids]
                           (cond (and (= (type seen-log)
                                         clojure.lang.Atom)
                                      (vector? @seen-log))
@@ -43,20 +54,23 @@
 (defmethod store-seen-ids :vector-atom [_ _ log seen-ids]
   (swap! log into seen-ids))
 
-(defmulti read-seen-ids (fn [replica state seen-log]
-                          (cond (and (= (type seen-log)
-                                        clojure.lang.Atom)
-                                     (vector? @seen-log))
-                                :vector-atom)))
+(defmulti read-seen-ids 
+  "Read seen ids from a log"
+  (fn [replica state seen-log]
+    (cond (and (= (type seen-log)
+                  clojure.lang.Atom)
+               (vector? @seen-log))
+          :vector-atom)))
 
 (defmethod read-seen-ids :vector-atom [_ _ seen-log]
   @seen-log)
 
-;; Allocates a unique id to the peer, such as in the kafka plugin
-;; This will need to be scrapped as we really need a grouping id
-;; i.e. slot that will ensure that messages will continue to be sent to the peer that 
-;; recoovers
-(defn allocate-log-id [event]
+(defn allocate-log-id 
+  "Allocates a unique id to the peer, such as in the kafka plugin
+  This will need to be scrapped as we really need a grouping id
+  i.e. slot that will ensure that messages will continue to be sent to the peer that 
+  recovers"
+  [event]
   (let [replica (:onyx.core/replica event)
         state (:onyx.core/state event)
         job-id (:onyx.core/job-id event)
@@ -78,7 +92,7 @@
           (recur (get-in @replica [:state-log job-id task-id peer-id])))))))
 
 (def state-fn-calls
-  ;; initialise state and seen-ids from logs
+  ;; allocate log-id (will be group-id in the future) and initialise state and seen buckets from logs
   {:lifecycle/before-task-start (fn inject-state [{:keys [onyx.core/replica 
                                                           onyx.core/state
                                                           state/fns
@@ -98,6 +112,8 @@
                                     {:state/log-id log-id
                                      :state/state (atom state)
                                      :state/seen-buckets (atom seen-buckets)}))
+   ;; generate new state log entries, apply them to state, and generate new segments
+   ;; only do so if the message has not been seen before
    :lifecycle/after-batch 
    (fn apply-operations [{:keys [state/fns 
                                  state/log-id 
