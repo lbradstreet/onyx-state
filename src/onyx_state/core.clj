@@ -11,8 +11,9 @@
 (defn seen? 
   "Determine whether an id has been seen before. First check the bloom filter buckets, if
   a bloom filter thinks it has been seen before, check the corresponding set bucket.
-  The idea is that the sets will expire before the buckets do.
-  Currently this function just checks the sets."
+  An optimisation is to let the sets expire before the bloom filters do, so we
+  get most of the benefit without full memory usage. Currently this
+  function just checks the sets."
   [{:keys [blooms sets] :as buckets} id]
   ;; do some pass on bloom-buckets, if any are maybe seen, then check corresponding id-bucket
   (boolean 
@@ -68,31 +69,13 @@
 (defmethod read-seen-ids :vector-atom [_ _ seen-log]
   @seen-log)
 
-(defn allocate-log-id 
-  "Allocates a unique id to the peer, such as in the kafka plugin
-  This will need to be scrapped as we really need a grouping id
-  i.e. slot that will ensure that messages will continue to be sent to the peer that 
-  recovers"
+(defn peer-log-id 
   [event]
   (let [replica (:onyx.core/replica event)
-        state (:onyx.core/state event)
         job-id (:onyx.core/job-id event)
         peer-id (:onyx.core/id event)
-        task-id (:onyx.core/task-id event)
-        n-peers (:onyx/max-peers (:onyx.core/task-map event))
-        _ (>!! (:onyx.core/outbox-ch event)
-               {:fn :allocate-state-log-id
-                :args {:n-peers n-peers
-                       :job-id job-id
-                       :task-id task-id 
-                       :peer-id peer-id}})] 
-    (loop [state-log-id (get-in @replica [:state-log job-id task-id peer-id])] 
-      (if state-log-id 
-        state-log-id
-        (do
-          ;(info "Spinning while waiting to be allocated state log id")
-          (Thread/sleep 50)
-          (recur (get-in @replica [:state-log job-id task-id peer-id])))))))
+        task-id (:onyx.core/task-id event)] 
+    (get-in @replica [:task-slot-ids job-id task-id peer-id])))
 
 (def state-fn-calls
   ;; allocate log-id (will be group-id in the future) and initialise state and seen buckets from logs
@@ -103,7 +86,8 @@
                                                           state/entries-log] 
                                                    :as event} 
                                                   lifecycle]
-                                  (let [log-id (allocate-log-id event)
+                                  (let [log-id (peer-log-id event)
+                                        _ (info "LOG " log-id " taskid " (:onyx.core/task-id event))
                                         {:keys [produce-log-entries apply-log-entry produce-segments]} fns
                                         peer-seen-log (get seen-log log-id)
                                         seen-ids (read-seen-ids replica state peer-seen-log)
@@ -112,6 +96,7 @@
                                         state (reduce apply-log-entry {} read-entries)
                                         initial-buckets {:blooms [] :sets [#{}]}
                                         seen-buckets (reduce apply-seen-id initial-buckets seen-ids)] 
+                                    (info "After replay: " state)
                                     {:state/log-id log-id
                                      :state/state (atom state)
                                      :state/seen-buckets (atom seen-buckets)}))

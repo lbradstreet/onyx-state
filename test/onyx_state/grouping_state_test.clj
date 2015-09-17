@@ -3,7 +3,6 @@
             [clojure.test :refer [deftest is]]
             [taoensso.timbre :refer [info error warn trace fatal] :as timbre]
             [onyx.plugin.core-async :refer [take-segments!]]
-            [onyx-state.state-log]
             [onyx.api]))
 
 ; A few problems so far
@@ -95,7 +94,7 @@
 ;;;;;;;;;;;;;;;;;
 ;; Test code
 
-(def n-messages 100)
+(def n-messages 10000)
 
 (def input-segments
   (map (fn [n]
@@ -109,9 +108,17 @@
           (map shuffle 
                (repeat 10 input-segments))))
 
+(def crash-count (atom 0))
+
+(def segment-count (atom 0))
+
+(def crash-on-segments #{2 7 20 60 84 89 34 23 100 344} #_(set (repeatedly 20 #(rand-int n-messages))))
+
 (defn identity-crash-sometimes [segment]
-  ; (when (zero? (rand-int 10))
-  ;   (throw (Exception. "Crash to restart.")))
+  (when (crash-on-segments (swap! segment-count inc)) 
+    (Thread/sleep 5000)
+    (info "CRRAAAASH")
+    (throw (Exception. "Crash to restart.")))
   segment)
 
 (def in-chan (chan 100000))
@@ -153,7 +160,7 @@
         peer-config (assoc (:peer-config config) :onyx/id id)
         env (onyx.api/start-env env-config)
         peer-group (onyx.api/start-peer-group peer-config)
-        batch-size 20
+        batch-size 2
         catalog [{:onyx/name :in
                   :onyx/plugin :onyx.plugin.core-async/input
                   :onyx/type :input
@@ -163,14 +170,14 @@
                   :onyx/doc "Reads segments from a core.async channel"}
 
                  {:onyx/name :agg
-                  :onyx/fn :clojure.core/identity
-                  ;:onyx/fn ::identity-crash-sometimes
+                  ;:onyx/fn :clojure.core/identity
+                  :onyx/fn ::identity-crash-sometimes
                   :onyx/type :function
                   :onyx/group-by-key :key
-                  ;:onyx/restart-pred-fn ::restartable?
+                  :onyx/restart-pred-fn ::restartable?
                   :onyx/min-peers 2
                   :onyx/max-peers 2
-                  :onyx/flux-policy :continue
+                  :onyx/flux-policy :recover ;; should only recover if possible?
                   :onyx/batch-size batch-size}
 
                  {:onyx/name :out
@@ -195,10 +202,12 @@
                      :lifecycle/calls ::out-calls}
                     {:lifecycle/task :out
                      :lifecycle/calls :onyx.plugin.core-async/writer-calls}]
-        v-peers (onyx.api/start-peers 5 peer-group)
+
+        v-peers (onyx.api/start-peers 6 peer-group)
+        _ (Thread/sleep 2000)
 
         ;; Load up data occurring multiple times, simulating retries etc
-        _ (doseq [segment segments-with-repeats]
+        _ (doseq [segment input-segments #_segments-with-repeats]
             (>!! in-chan segment))
         _ (>!! in-chan :done)
         _ (close! in-chan)
