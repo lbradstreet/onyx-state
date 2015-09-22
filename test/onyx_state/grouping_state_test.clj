@@ -2,6 +2,7 @@
   (:require [clojure.core.async :refer [chan >!! <!! close! sliding-buffer]]
             [clojure.test :refer [deftest is]]
             [taoensso.timbre :refer [info error warn trace fatal] :as timbre]
+            [onyx-state.log.bookkeeper]
             [onyx.plugin.core-async :refer [take-segments!]]
             [onyx.api]))
 
@@ -94,7 +95,7 @@
 ;;;;;;;;;;;;;;;;;
 ;; Test code
 
-(def n-messages 10000)
+(def n-messages 400)
 
 (def input-segments
   (map (fn [n]
@@ -112,7 +113,7 @@
 
 (def segment-count (atom 0))
 
-(def crash-on-segments #{2 7 20 60 84 89 34 23 100 344} #_(set (repeatedly 20 #(rand-int n-messages))))
+(def crash-on-segments #{2 7 20 60 84 89 34 23 100 344})
 
 (defn identity-crash-sometimes [segment]
   (when (crash-on-segments (swap! segment-count inc)) 
@@ -142,7 +143,10 @@
         config {:env-config
                 {:zookeeper/address "127.0.0.1:2188"
                  :zookeeper/server? true
-                 :zookeeper.server/port 2188}
+                 :zookeeper.server/port 2188
+                 ;:bookkeeper/port 3196
+                 :bookkeeper/local-quorum? true
+                 :bookkeeper/server? true}
 
                 :peer-config
                 {:zookeeper/address "127.0.0.1:2188"
@@ -165,6 +169,7 @@
                   :onyx/plugin :onyx.plugin.core-async/input
                   :onyx/type :input
                   :onyx/medium :core.async
+                  :onyx/pending-timeout 5000
                   :onyx/batch-size batch-size
                   :onyx/max-peers 1
                   :onyx/doc "Reads segments from a core.async channel"}
@@ -221,6 +226,13 @@
 
     ;; Wait, for longer because await-job-completion doesn't wait for task shutdown
     (Thread/sleep 1000)
+
+    (println "Actual is " 
+            (into {} 
+                 (map (fn [[k v]]
+                        (vector k (reduce + (map :value v)))) 
+                      (group-by :key input-segments))) 
+             )
 
     (is (= (into {} 
                  (map (fn [[k v]]

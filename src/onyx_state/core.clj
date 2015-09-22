@@ -1,5 +1,6 @@
 (ns onyx-state.core
   (:require [taoensso.timbre :refer [info error warn trace fatal] :as timbre]
+            [onyx-state.state-extensions :as state-extensions]
             [clojure.core.async :refer [chan >!! <!! close! sliding-buffer]]))
 
 (defn apply-seen-id 
@@ -22,53 +23,6 @@
                 (set-bucket id)) 
               sets))))
 
-;;;;
-;; For onyx to implement
-;; We can implement log storage for Kafka and maybe ZK (if small data is used and we gc)
-(defmulti store-log-entries 
-  "Store state update [op k v] entries in a log"
-  (fn [replica state log entries]
-    (cond (and (= (type log)
-                  clojure.lang.Atom)
-               (vector? @log))
-          :vector-atom)))
-
-(defmethod store-log-entries :vector-atom [_ _ log entries]
-  (swap! log into entries))
-
-(defmulti read-log-entries 
-  "Read state update [op k v] entries from log"
-  (fn [replica state log]
-    (cond (and (= (type log)
-                  clojure.lang.Atom)
-               (vector? @log))
-          :vector-atom)))
-
-(defmethod read-log-entries :vector-atom [_ _ log]
-  @log)
-
-(defmulti store-seen-ids 
-  "Store seen ids in a log. Ideally these will be timestamped for auto expiry"
-  (fn [replica state seen-log seen-ids]
-                          (cond (and (= (type seen-log)
-                                        clojure.lang.Atom)
-                                     (vector? @seen-log))
-                                :vector-atom)))
-
-(defmethod store-seen-ids :vector-atom [_ _ log seen-ids]
-  (swap! log into seen-ids))
-
-(defmulti read-seen-ids 
-  "Read seen ids from a log"
-  (fn [replica state seen-log]
-    (cond (and (= (type seen-log)
-                  clojure.lang.Atom)
-               (vector? @seen-log))
-          :vector-atom)))
-
-(defmethod read-seen-ids :vector-atom [_ _ seen-log]
-  @seen-log)
-
 (defn peer-log-id 
   [event]
   (let [replica (:onyx.core/replica event)
@@ -76,6 +30,21 @@
         peer-id (:onyx.core/id event)
         task-id (:onyx.core/task-id event)] 
     (get-in @replica [:task-slot-ids job-id task-id peer-id])))
+
+(defmethod state-extensions/initialise-log :atom [_ event] 
+  (get @(:state/entries-log event) (peer-log-id event)))
+
+(defmethod state-extensions/store-log-entries clojure.lang.Atom [log _ entries]
+  (swap! log into entries))
+
+(defmethod state-extensions/playback-log-entries clojure.lang.Atom [log _ state apply-fn]
+  (reduce apply-fn state @log))
+
+(defmethod state-extensions/store-seen-ids clojure.lang.Atom [log _ seen-ids]
+  (swap! log into seen-ids))
+
+(defmethod state-extensions/playback-seen-ids clojure.lang.Atom [seen-log _ bucket-state apply-fn]
+  (reduce apply-fn bucket-state @seen-log))
 
 (def state-fn-calls
   ;; allocate log-id (will be group-id in the future) and initialise state and seen buckets from logs
@@ -88,16 +57,24 @@
                                                   lifecycle]
                                   (let [log-id (peer-log-id event)
                                         _ (info "LOG " log-id " taskid " (:onyx.core/task-id event))
-                                        {:keys [produce-log-entries apply-log-entry produce-segments]} fns
+                                        {:keys [produce-log-entries 
+                                                apply-log-entry 
+                                                produce-segments]} fns
                                         peer-seen-log (get seen-log log-id)
-                                        seen-ids (read-seen-ids replica state peer-seen-log)
-                                        peer-entries-log (get entries-log log-id)
-                                        read-entries (read-log-entries replica state peer-entries-log)
-                                        state (reduce apply-log-entry {} read-entries)
+                                        _ (info "INITIALISING")
+                                        log (state-extensions/initialise-log :bookkeeper event)
+                                        _ (info "INITIALISED")
+                                        state (state-extensions/playback-log-entries log
+                                                                                     event 
+                                                                                     {}
+                                                                                     apply-log-entry)
+                                        _ (info "PLAYED BACK")
                                         initial-buckets {:blooms [] :sets [#{}]}
-                                        seen-buckets (reduce apply-seen-id initial-buckets seen-ids)] 
+                                        _ (info "Doing seen")
+                                        seen-buckets (state-extensions/playback-seen-ids peer-seen-log event initial-buckets apply-seen-id)] 
                                     (info "After replay: " state)
                                     {:state/log-id log-id
+                                     :state/log log
                                      :state/state (atom state)
                                      :state/seen-buckets (atom seen-buckets)}))
    ;; generate new state log entries, apply them to state, and generate new segments
@@ -105,12 +82,14 @@
    :lifecycle/after-batch 
    (fn apply-operations [{:keys [state/fns 
                                  state/log-id 
-                                 state/entries-log 
+                                 state/log 
                                  state/seen-log 
                                  state/seen-buckets 
                                  state/state] :as event} 
                          lifecycle]
-     (let [{:keys [produce-log-entries apply-log-entry produce-segments id]} fns
+     (let [start-time (System/currentTimeMillis)
+           _ (info "BATCH TIME: " start-time)
+           {:keys [produce-log-entries apply-log-entry produce-segments id]} fns
            segments (map :message (mapcat :leaves (:tree (:onyx.core/results event))))
            [state' 
             seen-buckets' 
@@ -142,11 +121,10 @@
                                segments)]
        (reset! state state')
        (reset! seen-buckets seen-buckets')
-       (let [replica (:onyx.core/replica event)
-             state (:onyx.core/state event)] 
-         ;; ensure these are stored in a single transaction to Kafka
-         (store-log-entries replica state (entries-log log-id) log-entries)
-         (store-seen-ids replica state (seen-log log-id) seen-ids))
+       ;; ensure these are stored in a single transaction to Kafka
+       (state-extensions/store-log-entries log event log-entries)
+       (state-extensions/store-seen-ids (seen-log log-id) event seen-ids)
+       (info "AFTER BATCH FULL: " (- (System/currentTimeMillis) start-time ))
        ;; segments' should be sent on to next task, 
        ;; but this is too hard to do with proper acking
        {}))})
