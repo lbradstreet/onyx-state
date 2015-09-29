@@ -72,13 +72,9 @@
 (defmethod state-extensions/initialise-log :bookkeeper [log-type event] 
   (let [replica (:onyx.core/replica event)
         bk-client (bookkeeper (:onyx.core/peer-opts event))
-        _ (info "DONE CONNECTING")
-        ledger (create-ledger bk-client
-                              ;; get these from task-map
-                              3 
-                              2 
-                              digest-type 
-                              password)] 
+        ensemble-size 3 ; get from task-map?
+        quorum-size 2 ; get from task-map?
+        ledger (create-ledger bk-client ensemble-size quorum-size digest-type password)] 
     (>!! (:onyx.core/outbox-ch event)
          {:fn :bookkeeper/book-id
           :args {:job-id (:onyx.core/job-id event)
